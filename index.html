@@ -114,10 +114,29 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:10px 0 4px}
     <input id="modelo" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-3.5-flash-lite">
     <label for="nombre">Nombre del asistente (palabra para activarlo)</label><input id="nombre" placeholder="Jarvis">
     <label for="trato">Cómo te llama</label><input id="trato" placeholder="señor">
-    <label for="voz">Voz</label><select id="voz"></select>
+    <label for="motor">Motor de voz</label>
+    <select id="motor"><option value="gemini">Voz Gemini (natural)</option><option value="sistema">Voz del celular</option></select>
+    <label for="vozG">Voz Gemini</label>
+    <select id="vozG">
+      <option value="Charon">Charon · informativa, de presentador (recomendada)</option>
+      <option value="Orus">Orus · firme</option>
+      <option value="Alnilam">Alnilam · firme y grave</option>
+      <option value="Sadaltager">Sadaltager · de experto</option>
+      <option value="Gacrux">Gacrux · madura</option>
+      <option value="Iapetus">Iapetus · clara</option>
+      <option value="Schedar">Schedar · pareja, tranquila</option>
+      <option value="Algenib">Algenib · rasposa</option>
+      <option value="Kore">Kore · firme (femenina)</option>
+    </select>
+    <label for="estilo">Estilo de la voz</label>
+    <input id="estilo" placeholder="sereno, elegante y seguro, ritmo pausado">
+    <label for="modeloTTS">Calidad de voz</label>
+    <select id="modeloTTS"><option value="gemini-3.8-flash-tts">Máxima (gemini-3.8-flash-tts)</option><option value="gemini-3.8-flash-lite-tts">Más rápida (flash-lite-tts)</option></select>
+    <label for="voz">Voz del celular (respaldo)</label><select id="voz"></select>
     <label for="vel">Velocidad</label><div class="rango"><input type="range" min="0.6" max="1.6" step="0.05" id="vel"><b></b></div>
     <label for="tono">Tono</label><div class="rango"><input type="range" min="0.5" max="1.5" step="0.05" id="tono"><b></b></div>
-    <div class="fila"><button id="btnProbar">Probar</button><button class="prim" id="btnGuardar">Guardar</button></div>
+    <div class="fila"><button id="btnProbar">Probar IA</button><button id="btnVoz">Probar voz</button></div>
+    <div class="fila"><button class="prim" id="btnGuardar" style="grid-column:1/3">Guardar</button></div>
     <p class="mini" style="margin-top:12px">La clave queda guardada solo en este navegador. Nadie más la ve.</p>
   </div>
 </details>
@@ -129,7 +148,8 @@ const $=s=>document.querySelector(s);
 const ua=navigator.userAgent, esIOS=/iPhone|iPad|iPod/.test(ua)||(ua.includes('Mac')&&'ontouchend' in document);
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const vozOK=!!SR&&window.isSecureContext;
-const DEF={modelo:'gemini-3.5-flash-lite',nombre:'Jarvis',trato:'señor',vel:'1.05',tono:'0.85'};
+const DEF={modelo:'gemini-3.5-flash-lite',nombre:'Jarvis',trato:'señor',vel:'1.05',tono:'0.85',motor:'gemini',vozG:'Charon',
+  estilo:'sereno, elegante y seguro, como un mayordomo de alta tecnología; ritmo pausado',modeloTTS:'gemini-3.8-flash-tts'};
 let cfg={}, historial=[], mascaraAbierta=false, manosLibres=false, hablando=false, rec=null, esperandoOrden=0, audio=null, ocupado=false;
 
 function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(_){return null}}
@@ -139,7 +159,9 @@ function estado(t,clase,sub){$('#estadoTxt').textContent=t;const r=$('#reactor')
 
 // ---------- Configuración ----------
 function cargarCfg(){
-  cfg={apikey:ls('apikey')||'',modelo:ls('modelo')||DEF.modelo,nombre:ls('nombre')||DEF.nombre,trato:ls('trato')||DEF.trato,vel:ls('vel')||DEF.vel,tono:ls('tono')||DEF.tono,voz:ls('voz')||''};
+  cfg={apikey:ls('apikey')||'',modelo:ls('modelo')||DEF.modelo,nombre:ls('nombre')||DEF.nombre,trato:ls('trato')||DEF.trato,vel:ls('vel')||DEF.vel,tono:ls('tono')||DEF.tono,voz:ls('voz')||'',
+    motor:ls('motor')||DEF.motor,vozG:ls('vozG')||DEF.vozG,estilo:ls('estilo')||DEF.estilo,modeloTTS:ls('modeloTTS')||DEF.modeloTTS};
+  $('#motor').value=cfg.motor;$('#vozG').value=cfg.vozG;$('#estilo').value=cfg.estilo;$('#modeloTTS').value=cfg.modeloTTS;
   try{historial=JSON.parse(ls('historial')||'[]')}catch(_){historial=[]}
   mascaraAbierta=ls('mascara')==='1';
   $('#modelo').value=cfg.modelo;$('#nombre').value=cfg.nombre;$('#trato').value=cfg.trato;$('#vel').value=cfg.vel;$('#tono').value=cfg.tono;
@@ -160,11 +182,14 @@ function guardarCfg(){
   if(k)ls('apikey',k);
   ls('modelo',$('#modelo').value.trim()||DEF.modelo);ls('nombre',$('#nombre').value.trim()||DEF.nombre);
   ls('trato',$('#trato').value.trim()||DEF.trato);ls('vel',$('#vel').value);ls('tono',$('#tono').value);ls('voz',$('#voz').value);
+  ls('motor',$('#motor').value);ls('vozG',$('#vozG').value);ls('estilo',$('#estilo').value.trim()||DEF.estilo);ls('modeloTTS',$('#modeloTTS').value);
+  cacheVoz.clear();
   $('#apikey').value='';cargarCfg();
 }
 $('#btnGuardar').onclick=()=>{guardarCfg();toast('Guardado')};
 $('#btnProbar').onclick=async()=>{guardarCfg();if(!cfg.apikey){toast('Primero pega tu API key');return}
   toast('Probando…');const r=await preguntar('Preséntate en una sola oración.',true);if(r.ok){burbuja(r.texto,'ia');hablar(r.texto);toast('Funciona')}else{toast(r.error,7000)}};
+$('#btnVoz').onclick=()=>{sonido(660);guardarCfg();avisoRespaldo=false;hablar('Buenas noches, '+cfg.trato+'. Todos los sistemas están en línea y a sus órdenes.')};
 document.querySelectorAll('.rango input').forEach(r=>r.addEventListener('input',()=>r.parentNode.querySelector('b').textContent=r.value));
 
 // ---------- Gemini ----------
@@ -259,15 +284,77 @@ function cargarVoces(){
   voces.forEach(v=>{const o=document.createElement('option');o.value=v.name;o.textContent=v.name+' ('+v.lang+')';if(v.name===cfg.voz)o.selected=true;sel.appendChild(o)});
   if(!voces.length){const o=document.createElement('option');o.textContent='Voz por defecto';o.value='';sel.appendChild(o)}
 }
-function hablar(t){
-  if(!t||!('speechSynthesis' in window))return;
+// ---------- Voz Gemini ----------
+const cacheVoz=new Map();          // frases repetidas ("Sellando la máscara…") no gastan cuota
+let fuenteActual=null, avisoRespaldo=false;
+
+function b64aBytes(b64){const s=atob(b64);const u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u}
+function pcmAWav(pcm,rate){            // por si Google devuelve audio crudo sin cabecera
+  const h=new ArrayBuffer(44),v=new DataView(h),w=(o,s)=>{for(let i=0;i<4;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  w(0,'RIFF');v.setUint32(4,36+pcm.length,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,pcm.length,true);
+  const out=new Uint8Array(44+pcm.length);out.set(new Uint8Array(h),0);out.set(pcm,44);return out;
+}
+function buscarAudio(o){              // encuentra el último bloque de audio en la respuesta
+  let hallado=null;
+  (function rec(x){if(!x||typeof x!=='object')return;
+    if(typeof x.data==='string'&&(x.type==='audio'||/audio/i.test(x.mime_type||x.mimeType||'')))hallado=x;
+    if(x.inlineData&&typeof x.inlineData.data==='string')hallado={data:x.inlineData.data,mime_type:x.inlineData.mimeType};
+    Object.values(x).forEach(rec)})(o);
+  return hallado;
+}
+async function audioGemini(texto){
+  const clave=cfg.vozG+'|'+cfg.estilo+'|'+cfg.modeloTTS+'|'+texto;
+  if(cacheVoz.has(clave))return cacheVoz.get(clave);
+  const cuerpo={model:cfg.modeloTTS,
+    input:[{type:'user_input',content:[{type:'text',text:texto,annotations:[{type:'speech_metadata',style:cfg.estilo}]}]}],
+    response_format:{type:'audio'},generation_config:{speech_config:[{voice:cfg.vozG}]}};
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',
+    {method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':cfg.apikey},body:JSON.stringify(cuerpo)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error('Voz Gemini '+r.status+((d.error&&d.error.message)?': '+d.error.message:''));
+  const a=buscarAudio(d);if(!a)throw new Error('Voz Gemini no devolvió audio');
+  let bytes=b64aBytes(a.data);
+  const esWav=bytes[0]===82&&bytes[1]===73&&bytes[2]===70&&bytes[3]===70;   // "RIFF"
+  if(!esWav){const m=/rate=(\d+)/.exec(a.mime_type||'');bytes=pcmAWav(bytes,m?+m[1]:24000)}
+  audio=audio||new (window.AudioContext||window.webkitAudioContext)();
+  const buf=await audio.decodeAudioData(bytes.buffer.slice(0));
+  if(cacheVoz.size>40)cacheVoz.delete(cacheVoz.keys().next().value);
+  cacheVoz.set(clave,buf);
+  return buf;
+}
+function alTerminarDeHablar(){hablando=false;estado(manosLibres?'Escuchando…':'Toca para hablar',manosLibres?'oyendo':'');if(manosLibres)setTimeout(iniciarEscucha,300)}
+function callar(){try{fuenteActual&&fuenteActual.stop()}catch(_){}fuenteActual=null;try{speechSynthesis.cancel()}catch(_){}}
+
+async function hablar(t){
+  if(!t)return;
+  callar();
+  if(cfg.motor==='gemini'&&cfg.apikey){
+    hablando=true;estado('Preparando voz…','pensando');try{rec&&rec.abort()}catch(_){}
+    try{
+      const buf=await audioGemini(t);
+      if(audio.state==='suspended')await audio.resume();
+      const src=audio.createBufferSource();src.buffer=buf;src.connect(audio.destination);
+      fuenteActual=src;estado('Hablando','hablando');
+      src.onended=()=>{if(fuenteActual===src){fuenteActual=null;alTerminarDeHablar()}};
+      src.start();
+      return;
+    }catch(e){
+      hablando=false;
+      if(!avisoRespaldo){avisoRespaldo=true;toast(e.message+' · uso la voz del celular.',7000)}
+    }
+  }
+  hablarSistema(t);
+}
+function hablarSistema(t){
+  if(!('speechSynthesis' in window))return;
   speechSynthesis.cancel();
   const u=new SpeechSynthesisUtterance(t);
   const v=voces.find(v=>v.name===$('#voz').value)||voces.find(v=>/es.(MX|US|419|PE)/i.test(v.lang))||voces[0];
   if(v){u.voice=v;u.lang=v.lang}else u.lang='es-MX';
   u.rate=+$('#vel').value;u.pitch=+$('#tono').value;
   u.onstart=()=>{hablando=true;estado('Hablando','hablando');try{rec&&rec.abort()}catch(_){}};
-  u.onend=u.onerror=()=>{hablando=false;estado(manosLibres?'Escuchando…':'Toca para hablar',manosLibres?'oyendo':'');if(manosLibres)setTimeout(iniciarEscucha,300)};
+  u.onend=u.onerror=alTerminarDeHablar;
   speechSynthesis.speak(u);
 }
 
@@ -331,7 +418,7 @@ async function escucharUnaVez(){
   if(!vozOK){$('#txt').focus();toast('Toca el micrófono de tu teclado y habla',3500);return}
   if(!(await asegurarMic()))return;
   if(manosLibres){toast('Manos libres ya está escuchando: di «'+cfg.nombre+'»');return}
-  speechSynthesis&&speechSynthesis.cancel();
+  callar();
   const r=crearRec(false);$('#btnMic').classList.add('activo');estado('Escuchando…','oyendo','Habla ahora');
   r.onresult=e=>enviar(e.results[0][0].transcript);
   r.onend=()=>{$('#btnMic').classList.remove('activo');if(!ocupado&&!hablando)estado('Toca para hablar','')};
