@@ -113,7 +113,7 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:10px 0 4px}
     <label for="modelo">Modelo</label>
     <input id="modelo" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-3.5-flash-lite">
     <label for="idioma">Idioma</label>
-    <select id="idioma"><option value="es">Español</option><option value="fr">Français</option><option value="en">English</option></select>
+    <select id="idioma"><option value="auto">Automático (detecta tu idioma)</option><option value="es">Español</option><option value="fr">Français</option><option value="en">English</option></select>
     <label for="nombre">Nombre del asistente (palabra para activarlo)</label><input id="nombre" placeholder="Jarvis">
     <label for="trato">Cómo te llama</label><input id="trato" placeholder="señor">
     <label for="motor">Motor de voz</label>
@@ -167,10 +167,26 @@ const IDIOMAS={
       si:'Yes, %?',prueba:'Good evening, %. All systems are online and at your service.',
       presentate:'Introduce yourself in one sentence.'}
 };
-function L(){return IDIOMAS[cfg.idioma]||IDIOMAS.es}
+let idiomaDetectado=ls('ultimoIdioma')||'es';
+function claveIdioma(){return cfg.idioma==='auto'?(IDIOMAS[idiomaDetectado]?idiomaDetectado:'es'):cfg.idioma}
+function L(){return IDIOMAS[claveIdioma()]||IDIOMAS.es}
+function trato(){return (cfg.idioma==='auto'&&Object.values(TRATO).includes(cfg.trato))?TRATO[claveIdioma()]:cfg.trato}
+function fijarIdioma(k){
+  if(!k)return;k=k.toLowerCase().slice(0,2);
+  if(k===idiomaDetectado)return;
+  idiomaDetectado=k;ls('ultimoIdioma',k);document.documentElement.lang=k;
+  cargarVoces();
+  if(manosLibres&&!grabando)iniciarEscucha();   // el detector de "Jarvis" pasa a escuchar en ese idioma
+}
+function idiomaDeTextoCorto(n){
+  if(/\b(ouvre|ouvrir|ferme|fermer|scelle|leve|masque|visiere)\b|mode combat/.test(n))return'fr';
+  if(/\b(open|close|seal|raise|mask|faceplate)\b|combat mode/.test(n))return'en';
+  return'es';
+}
 const TRATO={es:'señor',fr:'monsieur',en:'sir'};
 const DEF={modelo:'gemini-3.5-flash-lite',nombre:'Jarvis',trato:'señor',vel:'1.05',tono:'0.85',motor:'gemini',vozG:'Charon',
   estilo:'sereno, elegante y seguro, como un mayordomo de alta tecnología; ritmo pausado',modeloTTS:'gemini-3.8-flash-tts'};
+let grabando=false, grabacion=null;
 let cfg={}, historial=[], mascaraAbierta=false, manosLibres=false, hablando=false, rec=null, esperandoOrden=0, audio=null, ocupado=false;
 
 function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(_){return null}}
@@ -180,9 +196,9 @@ function estado(t,clase,sub){$('#estadoTxt').textContent=t;const r=$('#reactor')
 
 // ---------- Configuración ----------
 function cargarCfg(){
-  cfg={apikey:ls('apikey')||'',modelo:ls('modelo')||DEF.modelo,nombre:ls('nombre')||DEF.nombre,idioma:ls('idioma')||'es',trato:ls('trato')||DEF.trato,vel:ls('vel')||DEF.vel,tono:ls('tono')||DEF.tono,voz:ls('voz')||'',
+  cfg={apikey:ls('apikey')||'',modelo:ls('modelo')||DEF.modelo,nombre:ls('nombre')||DEF.nombre,idioma:ls('idioma2')||'auto',trato:ls('trato')||DEF.trato,vel:ls('vel')||DEF.vel,tono:ls('tono')||DEF.tono,voz:ls('voz')||'',
     motor:ls('motor')||DEF.motor,vozG:ls('vozG')||DEF.vozG,estilo:ls('estilo')||DEF.estilo,modeloTTS:ls('modeloTTS')||DEF.modeloTTS};
-  $('#idioma').value=cfg.idioma;document.documentElement.lang=cfg.idioma;$('#motor').value=cfg.motor;$('#vozG').value=cfg.vozG;$('#estilo').value=cfg.estilo;$('#modeloTTS').value=cfg.modeloTTS;
+  $('#idioma').value=cfg.idioma;document.documentElement.lang=claveIdioma();$('#motor').value=cfg.motor;$('#vozG').value=cfg.vozG;$('#estilo').value=cfg.estilo;$('#modeloTTS').value=cfg.modeloTTS;
   try{historial=JSON.parse(ls('historial')||'[]')}catch(_){historial=[]}
   mascaraAbierta=ls('mascara')==='1';
   $('#modelo').value=cfg.modelo;$('#nombre').value=cfg.nombre;$('#trato').value=cfg.trato;$('#vel').value=cfg.vel;$('#tono').value=cfg.tono;
@@ -202,7 +218,7 @@ function guardarCfg(){
   const k=$('#apikey').value.trim();
   if(k)ls('apikey',k);
   ls('modelo',$('#modelo').value.trim()||DEF.modelo);ls('nombre',$('#nombre').value.trim()||DEF.nombre);
-  ls('idioma',$('#idioma').value);ls('trato',$('#trato').value.trim()||DEF.trato);ls('vel',$('#vel').value);ls('tono',$('#tono').value);ls('voz',$('#voz').value);
+  ls('idioma2',$('#idioma').value);ls('trato',$('#trato').value.trim()||DEF.trato);ls('vel',$('#vel').value);ls('tono',$('#tono').value);ls('voz',$('#voz').value);
   ls('motor',$('#motor').value);ls('vozG',$('#vozG').value);ls('estilo',$('#estilo').value.trim()||DEF.estilo);ls('modeloTTS',$('#modeloTTS').value);
   cacheVoz.clear();
   $('#apikey').value='';cargarCfg();
@@ -211,15 +227,19 @@ $('#btnGuardar').onclick=()=>{guardarCfg();toast('Guardado')};
 $('#btnProbar').onclick=async()=>{guardarCfg();if(!cfg.apikey){toast('Primero pega tu API key');return}
   toast('Probando…');const r=await preguntar(L().presentate,true);if(r.ok){burbuja(r.texto,'ia');hablar(r.texto);toast('Funciona')}else{toast(r.error,7000)}};
 $('#idioma').onchange=()=>{const t=$('#trato').value.trim();
-  if(!t||Object.values(TRATO).includes(t))$('#trato').value=TRATO[$('#idioma').value];
+  if(!t||Object.values(TRATO).includes(t))$('#trato').value=TRATO[$('#idioma').value]||'señor';
   guardarCfg();cargarVoces();if(manosLibres)iniciarEscucha();toast('Idioma cambiado')};
-$('#btnVoz').onclick=()=>{sonido(660);guardarCfg();avisoRespaldo=false;hablar(L().prueba.replace('%',cfg.trato))};
+$('#btnVoz').onclick=()=>{sonido(660);guardarCfg();avisoRespaldo=false;hablar(L().prueba.replace('%',trato()))};
 document.querySelectorAll('.rango input').forEach(r=>r.addEventListener('input',()=>r.parentNode.querySelector('b').textContent=r.value));
 
 // ---------- Gemini ----------
 function sistema(){
   let s='Eres '+cfg.nombre+', el asistente de inteligencia artificial personal de tu usuario, integrado en su casco. ';
-  s+='Te diriges a él como "'+cfg.trato+'". Tu tono es elegante, sereno, ingenioso y con humor seco británico, '+(cfg.idioma==='es'?'pero hablas en español latinoamericano. ':'Responde SIEMPRE en '+L().nombre+', aunque el usuario te hable en otro idioma, salvo que te pida explícitamente cambiar de idioma. ');
+  s+='Te diriges a él como "'+cfg.trato+'". Tu tono es elegante, sereno, ingenioso y con humor seco británico, '+(cfg.idioma==='auto'
+    ?'Responde SIEMPRE en el mismo idioma en que el usuario te habla en su último mensaje (español, francés, inglés u otro); si habla español, usa español latinoamericano. Traduce el tratamiento a ese idioma (señor, monsieur, sir…). '
+    :(cfg.idioma==='es'?'pero hablas en español latinoamericano. ':'Responde SIEMPRE en '+L().nombre+', aunque el usuario te hable en otro idioma, salvo que te pida explícitamente cambiar de idioma. '));
+  s+='Empieza SIEMPRE tu respuesta con el código de dos letras del idioma en que respondes entre corchetes, por ejemplo [es], [fr] o [en]. ';
+  s+='Si el mensaje del usuario es un audio, escribe primero una línea que empiece con [DIJO] seguida de la transcripción exacta de lo que dijo, en su idioma original, y luego tu respuesta en otra línea. ';
   s+='Tus respuestas se leen en voz alta: máximo 2 o 3 oraciones cortas, sin emojis, sin markdown, sin listas ni asteriscos. ';
   s+='Si el usuario pide abrir, levantar o quitar la máscara, empieza tu respuesta EXACTAMENTE con [ABRIR]. Si pide cerrarla, bajarla, sellarla o entrar en modo combate, empieza EXACTAMENTE con [CERRAR]. Si no, no uses etiquetas. ';
   s+='Estado actual de la máscara: '+(mascaraAbierta?'abierta':'cerrada')+'. ';
@@ -229,11 +249,13 @@ function sistema(){
 }
 if(navigator.getBattery)navigator.getBattery().then(b=>{const f=()=>window._bat=Math.round(b.level*100);f();b.onlevelchange=f}).catch(()=>{});
 
-async function preguntar(texto,prueba){
+async function preguntar(texto,prueba,audioB64){
   if(!cfg.apikey)return{ok:false,error:'Falta tu API key: ábrela en Ajustes.'};
   const contents=[];
   if(!prueba)historial.slice(-12).forEach(h=>contents.push({role:h.r,parts:[{text:h.t}]}));
-  contents.push({role:'user',parts:[{text:texto}]});
+  contents.push({role:'user',parts:audioB64
+    ?[{inlineData:{mimeType:'audio/wav',data:audioB64}},{text:'(Mensaje de voz del usuario: transcríbelo en la línea [DIJO] y respóndele.)'}]
+    :[{text:texto}]});
   const cuerpo={systemInstruction:{parts:[{text:sistema()}]},contents,generationConfig:{temperature:0.8}};
   let r,d;
   try{
@@ -247,18 +269,26 @@ async function preguntar(texto,prueba){
     if(r.status===400&&/API key/i.test(m))ayuda=' Revisa que copiaste bien la API key.';
     else if(r.status===403)ayuda=' La key no tiene permiso: créala de nuevo en AI Studio.';
     else if(r.status===404)ayuda=' Ese modelo no existe: prueba gemini-3.8-flash o gemini-flash-latest.';
+    else if(r.status===400&&audioB64)ayuda=' Este modelo no aceptó el audio: en Ajustes prueba el modelo gemini-3.8-flash.';
     else if(r.status===429)ayuda=' Llegaste al límite gratuito por minuto: espera un momento.';
     return{ok:false,error:'Gemini respondió '+r.status+'.'+ayuda+(m?' ('+m+')':'')};
   }
   const partes=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts)||[];
   let t=partes.filter(p=>!p.thought).map(p=>p.text||'').join('').trim();
   if(!t)return{ok:false,error:'Gemini no devolvió texto. Intenta reformular.'};
+  let dijo='';
+  const md=/\[DIJO\][:\s]*([^\n]*)/i.exec(t);
+  if(md){dijo=md[1].trim();t=t.replace(md[0],'').trim()}
+  let idioma='';
+  const mi=/\[([a-z]{2})(?:-[A-Za-z]{2})?\]/.exec(t);
+  if(mi&&!/^(abrir|cerrar)$/i.test(mi[1])){idioma=mi[1];}
+  t=t.replace(/\[[a-z]{2}(?:-[A-Za-z]{2})?\]/g,'');
   let accion='';
   if(t.includes('[ABRIR]'))accion='abrir';
   if(t.includes('[CERRAR]'))accion='cerrar';
   t=t.replace(/\[(ABRIR|CERRAR)\]/g,'').replace(/[*#_`]/g,'').trim();
-  if(!prueba){historial.push({r:'user',t:texto.slice(0,400)},{r:'model',t:t.slice(0,400)});historial=historial.slice(-20);ls('historial',JSON.stringify(historial))}
-  return{ok:true,texto:t,accion};
+  if(!prueba){historial.push({r:'user',t:(audioB64?(dijo||'(mensaje de voz)'):texto).slice(0,400)},{r:'model',t:t.slice(0,400)});historial=historial.slice(-20);ls('historial',JSON.stringify(historial))}
+  return{ok:true,texto:t,accion,idioma,dijo};
 }
 
 // ---------- Máscara (simulada hasta conectar el ESP32) ----------
@@ -285,13 +315,26 @@ async function enviar(texto){
   burbuja(texto,'yo');
   let n=norm(texto);const w=norm(cfg.nombre);const i=n.indexOf(w);if(i>=0&&i<6)n=n.slice(i+w.length).trim();
   const acc=comandoLocal(n);
-  if(acc){mascara(acc);const f=L()[acc][Math.floor(Math.random()*3)].replace('%',cfg.trato);burbuja(f,'ia');hablar(f);return}
+  if(acc){if(cfg.idioma==='auto')fijarIdioma(idiomaDeTextoCorto(n));mascara(acc);const f=L()[acc][Math.floor(Math.random()*3)].replace('%',trato());burbuja(f,'ia');hablar(f);return}
   ocupado=true;estado('Pensando…','pensando');const b=burbuja('…','ia');
   const r=await preguntar(texto,false);ocupado=false;
-  if(r.ok){b.textContent=r.texto;if(r.accion)mascara(r.accion);hablar(r.texto)}
+  if(r.ok){if(r.idioma)fijarIdioma(r.idioma);b.textContent=r.texto;if(r.accion)mascara(r.accion);hablar(r.texto)}
   else{b.remove();const e=document.createElement('div');e.className='err';e.textContent=r.error;$('#chat').appendChild(e);estado('Error','', '');}
   $('#chat').scrollTop=1e6;
   if(!hablando)estado(manosLibres?'Escuchando…':'Toca para hablar',manosLibres?'oyendo':'');
+}
+async function enviarAudio(b64){
+  if(ocupado)return;
+  ocupado=true;estado('Pensando…','pensando');
+  const yo=burbuja('🎤 …','yo');const b=burbuja('…','ia');
+  const r=await preguntar(null,false,b64);ocupado=false;
+  if(r.ok){
+    yo.textContent=r.dijo||'🎤 (mensaje de voz)';
+    if(r.idioma)fijarIdioma(r.idioma);
+    b.textContent=r.texto;if(r.accion)mascara(r.accion);hablar(r.texto);
+  }else{yo.textContent='🎤 (mensaje de voz)';b.remove();const e=document.createElement('div');e.className='err';e.textContent=r.error;$('#chat').appendChild(e);
+    estado(manosLibres?'Escuchando…':'Toca para hablar',manosLibres?'oyendo':'');if(manosLibres)setTimeout(iniciarEscucha,400)}
+  $('#chat').scrollTop=1e6;
 }
 $('#btnEnviar').onclick=()=>{const t=$('#txt').value;$('#txt').value='';enviar(t)};
 $('#txt').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('#btnEnviar').click()}});
@@ -390,17 +433,18 @@ function oirFrase(t){
   const i=n.indexOf(w);if(i<0)return;
   const resto=n.slice(i+w.length).trim();
   sonido(880);
-  if(resto.length<2){esperandoOrden=Date.now()+8000;hablar(L().si.replace('%',cfg.trato));return}
+  if(resto.length<2&&cfg.idioma==='auto'){grabarYEnviar();return}
+  if(resto.length<2){esperandoOrden=Date.now()+8000;hablar(L().si.replace('%',trato()));return}
   enviar(t);
 }
 function iniciarEscucha(){
-  if(!manosLibres||hablando)return;
+  if(!manosLibres||hablando||grabando||ocupado)return;
   try{rec&&rec.abort()}catch(_){}
   rec=crearRec(true);
   rec.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++)if(e.results[i].isFinal)oirFrase(e.results[i][0].transcript)};
   rec.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){manosLibres=false;$('#manos').checked=false;estado('Toca para hablar','');toast('Permiso de micrófono denegado. Actívalo en los ajustes del navegador.',5000)}};
-  rec.onend=()=>{if(manosLibres&&!hablando)setTimeout(iniciarEscucha,250)};
-  rec.onstart=()=>estado('Escuchando…','oyendo','Di «'+cfg.nombre+'» y tu orden');
+  rec.onend=()=>{if(manosLibres&&!hablando&&!grabando&&!ocupado)setTimeout(iniciarEscucha,250)};
+  rec.onstart=()=>estado('Escuchando…','oyendo',cfg.idioma==='auto'?'Di «'+cfg.nombre+'», espera el pitido y habla':'Di «'+cfg.nombre+'» y tu orden');
   try{rec.start()}catch(_){}
 }
 $('#manos').onchange=async e=>{
@@ -437,7 +481,67 @@ async function asegurarMic(){
   }catch(e){permisoMic='denied';pintarMic();ayudaBloqueado();return false}
 }
 
+// Graba hasta que dejas de hablar y devuelve un WAV 16 kHz en base64 (o null si no hablaste)
+function grabar(maxMs=12000,esperaMs=6000){
+  return new Promise(async(resolve)=>{
+    let stream;
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}
+    catch(e){resolve(null);return}
+    audio=audio||new (window.AudioContext||window.webkitAudioContext)();
+    if(audio.state==='suspended')await audio.resume();
+    const src=audio.createMediaStreamSource(stream);
+    const proc=audio.createScriptProcessor(4096,1,1);
+    const mudo=audio.createGain();mudo.gain.value=0;
+    const trozos=[];const t0=performance.now();let piso=0,nPiso=0,hablo=false,ultimaVoz=0,fin=false;
+    function terminar(cancelar){
+      if(fin)return;fin=true;grabando=false;grabacion=null;
+      try{proc.disconnect();src.disconnect();mudo.disconnect()}catch(_){}
+      stream.getTracks().forEach(t=>t.stop());
+      if(cancelar||!hablo){resolve(null);return}
+      resolve(aWav16k(trozos,audio.sampleRate));
+    }
+    proc.onaudioprocess=e=>{
+      const d=e.inputBuffer.getChannelData(0);trozos.push(new Float32Array(d));
+      let sum=0;for(let i=0;i<d.length;i++)sum+=d[i]*d[i];const rms=Math.sqrt(sum/d.length);
+      const ahora=performance.now()-t0;
+      if(ahora<350){piso+=rms;nPiso++;return}
+      const umbral=Math.max(0.015,(piso/Math.max(1,nPiso))*3);
+      if(rms>umbral){if(!hablo)estado('Escuchando…','oyendo','Te escucho…');hablo=true;ultimaVoz=ahora}
+      if(hablo&&ahora-ultimaVoz>1300)terminar(false);
+      else if(!hablo&&ahora>esperaMs)terminar(true);
+      else if(ahora>maxMs)terminar(false);
+    };
+    src.connect(proc);proc.connect(mudo);mudo.connect(audio.destination);
+    grabando=true;grabacion={parar:()=>terminar(false),cancelar:()=>terminar(true)};
+  });
+}
+function aWav16k(trozos,rate){
+  let n=0;trozos.forEach(t=>n+=t.length);
+  const todo=new Float32Array(n);let o=0;trozos.forEach(t=>{todo.set(t,o);o+=t.length});
+  const paso=rate/16000,largo=Math.floor(n/paso);const pcm=new Uint8Array(largo*2);const v=new DataView(pcm.buffer);
+  for(let i=0;i<largo;i++){let x=todo[Math.floor(i*paso)];x=Math.max(-1,Math.min(1,x));v.setInt16(i*2,x<0?x*0x8000:x*0x7fff,true)}
+  const wav=pcmAWav(pcm,16000);
+  let bin='';for(let i=0;i<wav.length;i+=0x8000)bin+=String.fromCharCode.apply(null,wav.subarray(i,i+0x8000));
+  return btoa(bin);
+}
+async function grabarYEnviar(){
+  callar();try{rec&&rec.abort()}catch(_){}
+  $('#btnMic').classList.add('activo');estado('Escuchando…','oyendo','Habla en cualquier idioma');
+  const b64=await grabar();
+  $('#btnMic').classList.remove('activo');
+  if(!b64){estado(manosLibres?'Escuchando…':'Toca para hablar',manosLibres?'oyendo':'');toast('No te escuché. Toca y vuelve a intentar.');if(manosLibres)setTimeout(iniciarEscucha,300);return}
+  enviarAudio(b64);
+}
+const micOK=window.isSecureContext&&!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+
 async function escucharUnaVez(){
+  if(grabando&&grabacion){grabacion.parar();return}     // tocar de nuevo = terminar ya
+  if(cfg.idioma==='auto'){
+    sonido(880);
+    if(!micOK){$('#txt').focus();toast('Toca el micrófono de tu teclado y habla',3500);return}
+    if(!(await asegurarMic()))return;
+    grabarYEnviar();return;
+  }
   sonido(880);
   if(!vozOK){$('#txt').focus();toast('Toca el micrófono de tu teclado y habla',3500);return}
   if(!(await asegurarMic()))return;
@@ -452,7 +556,7 @@ async function escucharUnaVez(){
 $('#btnMic').onclick=escucharUnaVez;
 $('#reactor').onclick=escucharUnaVez;
 
-if(!vozOK){$('#filaManos').style.display='none';$('#tipVoz').textContent='Este navegador no deja usar el micrófono aquí: usa el micrófono del teclado para dictar.'}
+if(!vozOK){$('#filaManos').style.display='none';$('#tipVoz').textContent=micOK?'Toca el círculo y habla en el idioma que quieras.':'Este navegador no deja usar el micrófono aquí: usa el micrófono del teclado para dictar.'}
 else if(esIOS){$('#tipVoz').textContent='En iPhone, si el micrófono no responde desde el ícono de inicio, abre la app en Safari.'}
 
 // ---------- Inicio ----------
