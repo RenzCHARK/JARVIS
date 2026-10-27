@@ -112,6 +112,8 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:10px 0 4px}
     <input id="apikey" type="password" placeholder="AIza…" autocapitalize="off" autocorrect="off" spellcheck="false">
     <label for="modelo">Modelo</label>
     <input id="modelo" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-3.5-flash-lite">
+    <label for="idioma">Idioma</label>
+    <select id="idioma"><option value="es">Español</option><option value="fr">Français</option><option value="en">English</option></select>
     <label for="nombre">Nombre del asistente (palabra para activarlo)</label><input id="nombre" placeholder="Jarvis">
     <label for="trato">Cómo te llama</label><input id="trato" placeholder="señor">
     <label for="motor">Motor de voz</label>
@@ -148,6 +150,25 @@ const $=s=>document.querySelector(s);
 const ua=navigator.userAgent, esIOS=/iPhone|iPad|iPod/.test(ua)||(ua.includes('Mac')&&'ontouchend' in document);
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const vozOK=!!SR&&window.isSecureContext;
+const IDIOMAS={
+  es:{rec:'es-PE',voz:/^es/i,vozPref:/es.(MX|US|419|PE)/i,nombre:'español latinoamericano',fecha:'es-PE',
+      abrir:['Abriendo la máscara, %.','Como ordene, %.','Placa frontal arriba, %.'],
+      cerrar:['Sellando la máscara, %.','Modo combate activado, %.','Placa frontal asegurada, %.'],
+      si:'¿Sí, %?',prueba:'Buenas noches, %. Todos los sistemas están en línea y a sus órdenes.',
+      presentate:'Preséntate en una sola oración.'},
+  fr:{rec:'fr-FR',voz:/^fr/i,vozPref:/fr.FR/i,nombre:'francés',fecha:'fr-FR',
+      abrir:['J\'ouvre le masque, %.','À vos ordres, %.','Visière levée, %.'],
+      cerrar:['Je scelle le masque, %.','Mode combat activé, %.','Visière verrouillée, %.'],
+      si:'Oui, % ?',prueba:'Bonsoir, %. Tous les systèmes sont en ligne et à votre service.',
+      presentate:'Présente-toi en une seule phrase.'},
+  en:{rec:'en-US',voz:/^en/i,vozPref:/en.(GB|US)/i,nombre:'inglés',fecha:'en-GB',
+      abrir:['Opening the mask, %.','As you wish, %.','Faceplate up, %.'],
+      cerrar:['Sealing the mask, %.','Combat mode engaged, %.','Faceplate secured, %.'],
+      si:'Yes, %?',prueba:'Good evening, %. All systems are online and at your service.',
+      presentate:'Introduce yourself in one sentence.'}
+};
+function L(){return IDIOMAS[cfg.idioma]||IDIOMAS.es}
+const TRATO={es:'señor',fr:'monsieur',en:'sir'};
 const DEF={modelo:'gemini-3.5-flash-lite',nombre:'Jarvis',trato:'señor',vel:'1.05',tono:'0.85',motor:'gemini',vozG:'Charon',
   estilo:'sereno, elegante y seguro, como un mayordomo de alta tecnología; ritmo pausado',modeloTTS:'gemini-3.8-flash-tts'};
 let cfg={}, historial=[], mascaraAbierta=false, manosLibres=false, hablando=false, rec=null, esperandoOrden=0, audio=null, ocupado=false;
@@ -159,9 +180,9 @@ function estado(t,clase,sub){$('#estadoTxt').textContent=t;const r=$('#reactor')
 
 // ---------- Configuración ----------
 function cargarCfg(){
-  cfg={apikey:ls('apikey')||'',modelo:ls('modelo')||DEF.modelo,nombre:ls('nombre')||DEF.nombre,trato:ls('trato')||DEF.trato,vel:ls('vel')||DEF.vel,tono:ls('tono')||DEF.tono,voz:ls('voz')||'',
+  cfg={apikey:ls('apikey')||'',modelo:ls('modelo')||DEF.modelo,nombre:ls('nombre')||DEF.nombre,idioma:ls('idioma')||'es',trato:ls('trato')||DEF.trato,vel:ls('vel')||DEF.vel,tono:ls('tono')||DEF.tono,voz:ls('voz')||'',
     motor:ls('motor')||DEF.motor,vozG:ls('vozG')||DEF.vozG,estilo:ls('estilo')||DEF.estilo,modeloTTS:ls('modeloTTS')||DEF.modeloTTS};
-  $('#motor').value=cfg.motor;$('#vozG').value=cfg.vozG;$('#estilo').value=cfg.estilo;$('#modeloTTS').value=cfg.modeloTTS;
+  $('#idioma').value=cfg.idioma;document.documentElement.lang=cfg.idioma;$('#motor').value=cfg.motor;$('#vozG').value=cfg.vozG;$('#estilo').value=cfg.estilo;$('#modeloTTS').value=cfg.modeloTTS;
   try{historial=JSON.parse(ls('historial')||'[]')}catch(_){historial=[]}
   mascaraAbierta=ls('mascara')==='1';
   $('#modelo').value=cfg.modelo;$('#nombre').value=cfg.nombre;$('#trato').value=cfg.trato;$('#vel').value=cfg.vel;$('#tono').value=cfg.tono;
@@ -181,25 +202,28 @@ function guardarCfg(){
   const k=$('#apikey').value.trim();
   if(k)ls('apikey',k);
   ls('modelo',$('#modelo').value.trim()||DEF.modelo);ls('nombre',$('#nombre').value.trim()||DEF.nombre);
-  ls('trato',$('#trato').value.trim()||DEF.trato);ls('vel',$('#vel').value);ls('tono',$('#tono').value);ls('voz',$('#voz').value);
+  ls('idioma',$('#idioma').value);ls('trato',$('#trato').value.trim()||DEF.trato);ls('vel',$('#vel').value);ls('tono',$('#tono').value);ls('voz',$('#voz').value);
   ls('motor',$('#motor').value);ls('vozG',$('#vozG').value);ls('estilo',$('#estilo').value.trim()||DEF.estilo);ls('modeloTTS',$('#modeloTTS').value);
   cacheVoz.clear();
   $('#apikey').value='';cargarCfg();
 }
 $('#btnGuardar').onclick=()=>{guardarCfg();toast('Guardado')};
 $('#btnProbar').onclick=async()=>{guardarCfg();if(!cfg.apikey){toast('Primero pega tu API key');return}
-  toast('Probando…');const r=await preguntar('Preséntate en una sola oración.',true);if(r.ok){burbuja(r.texto,'ia');hablar(r.texto);toast('Funciona')}else{toast(r.error,7000)}};
-$('#btnVoz').onclick=()=>{sonido(660);guardarCfg();avisoRespaldo=false;hablar('Buenas noches, '+cfg.trato+'. Todos los sistemas están en línea y a sus órdenes.')};
+  toast('Probando…');const r=await preguntar(L().presentate,true);if(r.ok){burbuja(r.texto,'ia');hablar(r.texto);toast('Funciona')}else{toast(r.error,7000)}};
+$('#idioma').onchange=()=>{const t=$('#trato').value.trim();
+  if(!t||Object.values(TRATO).includes(t))$('#trato').value=TRATO[$('#idioma').value];
+  guardarCfg();cargarVoces();if(manosLibres)iniciarEscucha();toast('Idioma cambiado')};
+$('#btnVoz').onclick=()=>{sonido(660);guardarCfg();avisoRespaldo=false;hablar(L().prueba.replace('%',cfg.trato))};
 document.querySelectorAll('.rango input').forEach(r=>r.addEventListener('input',()=>r.parentNode.querySelector('b').textContent=r.value));
 
 // ---------- Gemini ----------
 function sistema(){
   let s='Eres '+cfg.nombre+', el asistente de inteligencia artificial personal de tu usuario, integrado en su casco. ';
-  s+='Te diriges a él como "'+cfg.trato+'". Tu tono es elegante, sereno, ingenioso y con humor seco británico, pero hablas en español latinoamericano. ';
+  s+='Te diriges a él como "'+cfg.trato+'". Tu tono es elegante, sereno, ingenioso y con humor seco británico, '+(cfg.idioma==='es'?'pero hablas en español latinoamericano. ':'Responde SIEMPRE en '+L().nombre+', aunque el usuario te hable en otro idioma, salvo que te pida explícitamente cambiar de idioma. ');
   s+='Tus respuestas se leen en voz alta: máximo 2 o 3 oraciones cortas, sin emojis, sin markdown, sin listas ni asteriscos. ';
   s+='Si el usuario pide abrir, levantar o quitar la máscara, empieza tu respuesta EXACTAMENTE con [ABRIR]. Si pide cerrarla, bajarla, sellarla o entrar en modo combate, empieza EXACTAMENTE con [CERRAR]. Si no, no uses etiquetas. ';
   s+='Estado actual de la máscara: '+(mascaraAbierta?'abierta':'cerrada')+'. ';
-  s+='Fecha y hora local (Lima): '+new Date().toLocaleString('es-PE',{weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})+'. ';
+  s+='Fecha y hora local (Lima): '+new Date().toLocaleString(L().fecha,{weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})+'. ';
   if(window._bat!=null)s+='Batería del celular: '+window._bat+' por ciento. ';
   return s;
 }
@@ -245,11 +269,11 @@ function mascara(a){
 }
 function comandoLocal(n){
   if(n.length>45)return'';
-  if(/\b(abre|abrir|abrete|levanta|quitate)\b|sube la/.test(n))return'abrir';
-  if(/\b(cierra|cerrar|cierrate|sella|sellar)\b|baja la|modo combate/.test(n))return'cerrar';
+  if(/\b(abre|abrir|abrete|levanta|quitate|ouvre|ouvrir|leve|open|raise)\b|sube la|face ?plate up/.test(n))return'abrir';
+  if(/\b(cierra|cerrar|cierrate|sella|sellar|ferme|fermer|scelle|close|seal)\b|baja la|modo combate|mode combat|combat mode/.test(n))return'cerrar';
   return'';
 }
-const FR={abrir:['Abriendo la máscara, %.','Como ordene, %.','Placa frontal arriba, %.'],cerrar:['Sellando la máscara, %.','Modo combate activado, %.','Placa frontal asegurada, %.']};
+
 
 // ---------- Chat ----------
 function burbuja(texto,clase){const d=document.createElement('div');d.className='msg '+clase;d.textContent=texto;$('#chat').appendChild(d);$('#chat').scrollTop=1e6;return d}
@@ -261,7 +285,7 @@ async function enviar(texto){
   burbuja(texto,'yo');
   let n=norm(texto);const w=norm(cfg.nombre);const i=n.indexOf(w);if(i>=0&&i<6)n=n.slice(i+w.length).trim();
   const acc=comandoLocal(n);
-  if(acc){mascara(acc);const f=FR[acc][Math.floor(Math.random()*3)].replace('%',cfg.trato);burbuja(f,'ia');hablar(f);return}
+  if(acc){mascara(acc);const f=L()[acc][Math.floor(Math.random()*3)].replace('%',cfg.trato);burbuja(f,'ia');hablar(f);return}
   ocupado=true;estado('Pensando…','pensando');const b=burbuja('…','ia');
   const r=await preguntar(texto,false);ocupado=false;
   if(r.ok){b.textContent=r.texto;if(r.accion)mascara(r.accion);hablar(r.texto)}
@@ -279,7 +303,7 @@ function sonido(f){try{audio=audio||new (window.AudioContext||window.webkitAudio
 let voces=[];
 function cargarVoces(){
   if(!('speechSynthesis' in window))return;
-  voces=speechSynthesis.getVoices().filter(v=>/^es/i.test(v.lang));
+  voces=speechSynthesis.getVoices().filter(v=>L().voz.test(v.lang));
   const sel=$('#voz');sel.innerHTML='';
   voces.forEach(v=>{const o=document.createElement('option');o.value=v.name;o.textContent=v.name+' ('+v.lang+')';if(v.name===cfg.voz)o.selected=true;sel.appendChild(o)});
   if(!voces.length){const o=document.createElement('option');o.textContent='Voz por defecto';o.value='';sel.appendChild(o)}
@@ -350,8 +374,8 @@ function hablarSistema(t){
   if(!('speechSynthesis' in window))return;
   speechSynthesis.cancel();
   const u=new SpeechSynthesisUtterance(t);
-  const v=voces.find(v=>v.name===$('#voz').value)||voces.find(v=>/es.(MX|US|419|PE)/i.test(v.lang))||voces[0];
-  if(v){u.voice=v;u.lang=v.lang}else u.lang='es-MX';
+  const v=voces.find(v=>v.name===$('#voz').value)||voces.find(v=>L().vozPref.test(v.lang))||voces[0];
+  if(v){u.voice=v;u.lang=v.lang}else u.lang=L().rec;
   u.rate=+$('#vel').value;u.pitch=+$('#tono').value;
   u.onstart=()=>{hablando=true;estado('Hablando','hablando');try{rec&&rec.abort()}catch(_){}};
   u.onend=u.onerror=alTerminarDeHablar;
@@ -359,14 +383,14 @@ function hablarSistema(t){
 }
 
 // ---------- Voz que escucha ----------
-function crearRec(continuo){const r=new SR();r.lang='es-PE';r.continuous=continuo;r.interimResults=false;r.maxAlternatives=1;return r}
+function crearRec(continuo){const r=new SR();r.lang=L().rec;r.continuous=continuo;r.interimResults=false;r.maxAlternatives=1;return r}
 function oirFrase(t){
   const n=norm(t),w=norm(cfg.nombre);
   if(esperandoOrden&&Date.now()<esperandoOrden){esperandoOrden=0;enviar(t);return}
   const i=n.indexOf(w);if(i<0)return;
   const resto=n.slice(i+w.length).trim();
   sonido(880);
-  if(resto.length<2){esperandoOrden=Date.now()+8000;hablar('¿Sí, '+cfg.trato+'?');return}
+  if(resto.length<2){esperandoOrden=Date.now()+8000;hablar(L().si.replace('%',cfg.trato));return}
   enviar(t);
 }
 function iniciarEscucha(){
